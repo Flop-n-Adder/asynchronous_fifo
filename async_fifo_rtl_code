@@ -1,0 +1,113 @@
+module async_fifo #(
+    parameter DATA_WIDTH = 8,   // Width of the data in bits
+    parameter FIFO_DEPTH = 16   // Number of words in FIFO (must be a power of 2)
+)(
+    input wire                  wr_clk,     // Write clock
+    input wire                  rd_clk,     // Read clock
+    input wire                  wr_rst_n,   // Write reset (active low)
+    input wire                  rd_rst_n,   // Read reset (active low)
+    input wire                  wr_en,      // Write enable
+    input wire                  rd_en,      // Read enable
+    input wire  [DATA_WIDTH-1:0] wr_data,   // Data input for write
+    output reg  [DATA_WIDTH-1:0] rd_data,   // Data output for read
+    output wire                 full,       // FIFO full flag
+    output wire                 empty       // FIFO empty flag
+);
+
+    // Calculating pointer size based on FIFO depth
+    localparam ADDR_WIDTH = $clog2(FIFO_DEPTH);
+
+    // Memory array
+    reg [FIFO_DEPTH-1:0][DATA_WIDTH-1:0] fifo_mem;
+
+    // Write and read pointers in binary and Gray code
+    reg [ADDR_WIDTH:0] wr_ptr, wr_ptr_gray, wr_ptr_gray_rd_clk, wr_ptr_gray_rd_clk2;
+    reg [ADDR_WIDTH:0] rd_ptr, rd_ptr_gray, rd_ptr_gray_wr_clk, rd_ptr_gray_wr_clk2;
+    reg [ADDR_WIDTH:0] wr_ptr_rd_clk, rd_ptr_wr_clk;
+    
+
+    // Full condition logic
+    assign full = (wr_ptr == {~rd_ptr_wr_clk[ADDR_WIDTH:ADDR_WIDTH-1], rd_ptr_wr_clk[ADDR_WIDTH-2:0]});
+
+    // Empty condition logic
+    assign empty = (wr_ptr_rd_clk == rd_ptr);
+
+
+    // Write pointer update and Gray code conversion
+    always @(posedge wr_clk or negedge wr_rst_n) begin
+        if (!wr_rst_n) begin
+            wr_ptr      <= 0;
+            wr_ptr_gray <= 0;
+        end else if (wr_en && !full) begin
+            wr_ptr      <= wr_ptr + 1;
+            wr_ptr_gray <= (wr_ptr + 1) ^ ((wr_ptr + 1) >> 1);  
+        end
+    end
+
+    // Write pointer synchronization into read clock domain
+    always @(posedge rd_clk or negedge rd_rst_n) begin
+        if (!rd_rst_n) begin
+            wr_ptr_gray_rd_clk  <= 0;
+            wr_ptr_gray_rd_clk2 <= 0;
+        end else begin
+            wr_ptr_gray_rd_clk  <= wr_ptr_gray;
+            wr_ptr_gray_rd_clk2 <= wr_ptr_gray_rd_clk;
+        end
+    end
+    
+    // Converting synchronized Gray code to binary using XOR reduction
+    integer j;
+    always @* begin
+        wr_ptr_rd_clk[ADDR_WIDTH] = wr_ptr_gray_rd_clk2[ADDR_WIDTH];
+       for (j=1; j < ADDR_WIDTH; j++) begin
+            wr_ptr_rd_clk[ADDR_WIDTH-j] = ^(wr_ptr_gray_rd_clk2 >> (ADDR_WIDTH-j));
+       end
+    end
+    
+    // Read pointer update and Gray code conversion
+    always @(posedge rd_clk or negedge rd_rst_n) begin
+        if (!rd_rst_n) begin
+            rd_ptr      <= 0;
+            rd_ptr_gray <= 0;
+        end else if (rd_en && !empty) begin
+            rd_ptr      <= rd_ptr + 1;
+            rd_ptr_gray <= (rd_ptr + 1) ^ ((rd_ptr + 1) >> 1);  
+        end
+    end
+
+    // Read pointer synchronization into write clock domain
+    always @(posedge wr_clk or negedge wr_rst_n) begin
+        if (!wr_rst_n) begin
+            rd_ptr_gray_wr_clk  <= 0;
+            rd_ptr_gray_wr_clk2 <= 0;
+        end else begin
+            rd_ptr_gray_wr_clk  <= rd_ptr_gray;
+            rd_ptr_gray_wr_clk2 <= rd_ptr_gray_wr_clk;
+        end
+    end
+    
+    //// Converting synchronized Gray code to binary using XOR reduction
+    integer k;
+    always @* begin
+        rd_ptr_wr_clk[ADDR_WIDTH] = rd_ptr_gray_wr_clk2[ADDR_WIDTH];
+       for (k=1; k <ADDR_WIDTH; k++) begin
+            rd_ptr_wr_clk[ADDR_WIDTH-k] = ^(rd_ptr_gray_wr_clk2 >> (ADDR_WIDTH-k));
+       end
+    end
+    
+
+    // Write operation
+    always @(posedge wr_clk) begin
+        if (wr_en && !full) begin
+            fifo_mem[wr_ptr] <= wr_data;
+        end
+    end
+
+    // Read operation
+    always @(posedge rd_clk) begin
+        if (rd_en && !empty) begin
+            rd_data <= fifo_mem[rd_ptr];
+        end
+    end
+
+endmodule
